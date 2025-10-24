@@ -4,7 +4,8 @@ import queue
 import threading
 import requests
 import time
-
+from llm import llm_response
+import re
 
 
 class AssistantSpeecher():
@@ -13,12 +14,10 @@ class AssistantSpeecher():
         self.processing = False
 
 
+
         self.recognizer = sr.Recognizer()
         self.microphone = sr.Microphone()
-        self.tts_engine = pyttsx3.init()
 
-        self.tts_engine.setProperty('rate', 150)
-        self.tts_engine.setProperty('volume', 0.8)
 
         self.speech_queue = queue.Queue()
         self.llm_queue = queue.Queue()
@@ -33,6 +32,15 @@ class AssistantSpeecher():
             print("Возникла ошибка при настройке микрофона"); print(e)
 
 
+    def setup_tts_engine(self):
+        self.tts_engine = pyttsx3.init()
+
+        self.tts_engine.startLoop(False)
+
+        self.tts_engine.setProperty('rate', 150)
+        self.tts_engine.setProperty('volume', 0.8)
+
+
     def speech_recognizer(self):
         print("Прослушивание начилось")
         while self.listening:
@@ -44,11 +52,15 @@ class AssistantSpeecher():
                 def regognize():
                     try:
                         print("Распознавание началось")
-                        text = self.recognizer.recognize_google(audio, "ru-RU")
+                        text = self.recognizer.recognize_google(
+                            audio,
+                            language="ru-RU"
+                        )
 
                         if any( step_word in text.lower() for step_word in ["стоп","остановись","остановка", "не продолжай"]):
                             print("Обнаружено стоп-слово")
-                            self.stop()
+                            if self.tts_engine.isBusy():
+                                self.tts_engine.stop()
 
                         if len(text.strip())>3:
                             print("Текст добавлен в очередь")
@@ -79,7 +91,8 @@ class AssistantSpeecher():
                 text = self.speech_queue.get(timeout=1)
                 if text:
                     print(f"Получен запрос с текстом {text}")
-                    request = str(requests.get("http://www.google.com/search").content)[:20]
+                    request = requests.get("https://www.google.com").content[:20]
+                    #request = llm_response(str(text))
                     if request:
                          self.llm_queue.put(request)
             except queue.Empty:
@@ -89,13 +102,21 @@ class AssistantSpeecher():
                 print(e)
                 time.sleep(0.1)
 
+    def tts_loop(self):
+        while self.tts_engine.isBusy():
+            self.tts_engine.iterate()
+            time.sleep(0.05)
+
+
     def tts_say(self):
         while self.processing:
             try:
                 text = self.llm_queue.get(timeout=1)
                 if text:
                     print("text generate")
+                    print("Вот мой текст === " + str(text))
                     self.speak(text)
+                    time.sleep(0.5)
             except queue.Empty:
                 continue
             except Exception as e:
@@ -105,15 +126,27 @@ class AssistantSpeecher():
 
     def speak(self, text):
         try:
-            self.tts_engine.say(text)
-            self.tts_engine.runAndWait()
+            if not self.tts_engine.isBusy():
+                self.setup_tts_engine()
+                self.tts_engine.say(text)
+                self.tts_loop()
+            else:
+                self.tts_engine.endLoop()
+                self.tts_engine.stop()
+
+                while not self.speech_queue.empty():
+                    self.speech_queue.get()
+
+                while not self.llm_queue.empty():
+                    self.llm_queue.get()
+
+
         except Exception as e:
-            print(e)
             print("Возникла ошибкав точке 56")
+            print(e)
 
     def start(self):
         print("Процесс запущен")
-
         self.setup_microphone()
 
         self.listening = True
@@ -129,6 +162,8 @@ class AssistantSpeecher():
 
         tts_thread = threading.Thread(target=self.tts_say, daemon=True)
         threadings.append(tts_thread)
+
+
 
 
         for i in threadings:
@@ -149,6 +184,8 @@ class AssistantSpeecher():
         except KeyboardInterrupt:
             self.stop()
 
+        for i in threadings:
+            i.join()
 
 
     def stop(self):
@@ -164,6 +201,7 @@ class AssistantSpeecher():
             self.llm_queue.get()
 
         time.sleep(1)
+        self.tts_engine.endLoop()
         print("Программа остановлена")
 
 
