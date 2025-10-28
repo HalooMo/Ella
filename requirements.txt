@@ -1,0 +1,5 @@
+torchaudio
+omegaconf
+ipython
+soundfile
+pygame
